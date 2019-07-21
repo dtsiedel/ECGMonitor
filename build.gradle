@@ -25,6 +25,7 @@ repositories {
 dependencies {
   compile "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
   compile "io.ktor:ktor-server-netty:$ktor_version"
+  compile "io.ktor:ktor-websockets:$ktor_version"
   testCompile 'junit:junit:4.11'
   testCompile "org.jetbrains.kotlin:kotlin-test-junit:$kotlin_version"
 }
@@ -33,7 +34,3 @@ jar {
   manifest { attributes 'Main-Class': 'ecg.RunServerKt' }
   from { configurations.compile.collect { it.isDirectory() ? it : zipTree(it) } }
 }
-
-//task wrapper(type: Wrapper) {
-//  gradleVersion = "5.5.1"
-//}
