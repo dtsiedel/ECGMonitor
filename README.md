@@ -1,0 +1,3 @@
+# Building and Running
+
+`./gradlew`
