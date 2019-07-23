@@ -12,7 +12,51 @@ import io.ktor.server.engine.*
 import io.ktor.server.netty.*
 import io.ktor.util.*
 import io.ktor.websocket.*
+
 import kotlinx.coroutines.channels.*
+import kotlinx.serialization.*
+import kotlinx.serialization.json.*
+
+// Used by a client to register itself as a source. This will add it as
+// a key in the map of possible sources. The server also will assign a
+// UUID to the source, and report both the names and UUIDs when a browser
+// requests it. There is no "unregister" command - a registed client
+// will automatically by unregistered when the websocket connection
+// is closed.
+// Format: {"register": "some display name"}
+@Serializable
+data class RegisterMessage(val register: String)
+
+// Used by a client to subscribe itself to a source by its UUID. This
+// will add the client to the listeners list of the source, and ensure
+// that they get any message published by that source. There is a
+// matching command to unsubscribe, or the client will automatically
+// be unsubscribed when its websocket disconnects.
+// Format: {"subscribe": "some UUID"}
+@Serializable
+data class SubscribeMessage(val subscribe: String)
+
+// Used by a client to unsubscribe itself from a source by its UUID.
+// The client will then no longer receive messages published by that
+// source. If you are shutting down a client there is no need to
+// unsubscribe manually, as closing the websocket will automatically
+// unsubscibe it from everything.
+// Format: {"unsubscribe": "some UUID"}
+@Serializable
+data class UnsubscribeMessage(val unsubscribe: String)
+
+// Used by a source to publish data to all of its listeners. Is only
+// published to its listeners at the exact moment that it is sent,
+// meaning that the message can be swallowed if there are no listeners.
+// In our context, the data will be a single analog reading from the
+// ECG monitor, which is why it is of type Double.
+@Serializable
+data class PublishMessage(val publish: Double)
+
+// TODO: will likely need two maps - one maps sessions to their UUID/name
+// stored in an object, and the other maps to listeners. It cannot be
+// easily stored in a single map because Kotlin doesn't have heterogenous
+// map values
 
 // The keys are the connected "source" clients. One is added each time
 // a ws client registers itself with the "register" command, and they
@@ -75,5 +119,12 @@ fun main(args: Array<String>) {
 	staticModule()
         websocketModule()
     }
+
+    //TODO: note that you can catch kotlinx.serialization.SerializationException to handle bad format
+    println(Json.parse(RegisterMessage.serializer(), "{register: test}"))
+    println(Json.parse(SubscribeMessage.serializer(), "{subscribe: abc123}"))
+    println(Json.parse(UnsubscribeMessage.serializer(), "{unsubscribe: 456def}"))
+    println(Json.parse(UnsubscribeMessage.serializer(), "{unsubscribe: 456def}"))
+    println(Json.parse(PublishMessage.serializer(), "{publish: 78.1}"))
     server.start(wait = true)
 }
