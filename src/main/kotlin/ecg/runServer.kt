@@ -53,10 +53,9 @@ data class UnsubscribeMessage(val unsubscribe: String)
 @Serializable
 data class PublishMessage(val publish: Double)
 
-// TODO: will likely need two maps - one maps sessions to their UUID/name
-// stored in an object, and the other maps to listeners. It cannot be
-// easily stored in a single map because Kotlin doesn't have heterogenous
-// map values
+data class ClientEntry(val displayName: String,
+                       val uuid: String,
+                       val listeners: MutableList<WebSocketServerSession>)
 
 // The keys are the connected "source" clients. One is added each time
 // a ws client registers itself with the "register" command, and they
@@ -65,12 +64,14 @@ data class PublishMessage(val publish: Double)
 // that are waiting for updates. Clients can add or remove themselves
 // from that list with "subscribe"/"unsubscribe".
 val connectedWebsockets =
-	mutableMapOf<WebSocketServerSession, MutableList<WebSocketServerSession>>()
+	mutableMapOf<WebSocketServerSession, ClientEntry>()
 
 // Called on each websocket message. Parses out the type of command,
 // and handles it appropriately.
 suspend fun handleWSMessage(text: String, source: WebSocketServerSession) {
     println("Received ${text} from ${source}")
+    //TODO: right now this sends to all sources, of course we want to
+    //      check the subscriber lists in the future instead.
     for (client in connectedWebsockets.keys) {
 	client.outgoing.send(Frame.Text("You sent ${text}!"))
     }
@@ -98,9 +99,10 @@ fun Application.websocketModule() {
     install(WebSockets)
     routing {
         webSocket("/ws") {
-	    connectedWebsockets.put(
-	        this, mutableListOf<WebSocketServerSession>()
-            )
+            //TODO: this will be done on subscribe instead
+	    //connectedWebsockets.put(
+	        //this, mutableListOf<WebSocketServerSession>()
+            //)
             try {
                 while (true) {
                     val text = (incoming.receive() as Frame.Text).readText()
@@ -120,7 +122,7 @@ fun main(args: Array<String>) {
         websocketModule()
     }
 
-    //TODO: note that you can catch kotlinx.serialization.SerializationException to handle bad format
+    //note that you can catch kotlinx.serialization.SerializationException to handle bad format
     println(Json.parse(RegisterMessage.serializer(), "{register: test}"))
     println(Json.parse(SubscribeMessage.serializer(), "{subscribe: abc123}"))
     println(Json.parse(UnsubscribeMessage.serializer(), "{unsubscribe: 456def}"))
