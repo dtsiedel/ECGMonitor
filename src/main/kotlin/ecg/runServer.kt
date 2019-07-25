@@ -17,6 +17,8 @@ import kotlinx.coroutines.channels.*
 import kotlinx.serialization.*
 import kotlinx.serialization.json.*
 
+import java.util.UUID
+
 // Used by a client to register itself as a source. This will add it as
 // a key in the map of possible sources. The server also will assign a
 // UUID to the source, and report both the names and UUIDs when a browser
@@ -53,6 +55,7 @@ data class UnsubscribeMessage(val unsubscribe: String)
 @Serializable
 data class PublishMessage(val publish: Double)
 
+// Values in the connectedClients map.
 data class ClientEntry(val displayName: String,
                        val uuid: String,
                        val listeners: MutableList<WebSocketServerSession>)
@@ -66,14 +69,37 @@ data class ClientEntry(val displayName: String,
 val connectedWebsockets =
 	mutableMapOf<WebSocketServerSession, ClientEntry>()
 
+// Handle a websocket message that registers a new source. Throws a
+// kotlinx.serialization.SerializationException if the string format
+// is not valid.
+suspend fun handleRegister(client: WebSocketServerSession, text: String) {
+    val msg = Json.parse(RegisterMessage.serializer(), text)
+    val uuid = UUID.randomUUID().toString()
+    val entry = ClientEntry(
+        msg.register, uuid, mutableListOf<WebSocketServerSession>()
+    )
+    connectedWebsockets.put(client, entry)
+    println("Registered ${entry} for ${client}")
+    //TODO: make a response object type instead of raw string
+    client.send(Frame.Text("{'UUID':'${uuid}'}"))
+}
+
+val handlerList = listOf(::handleRegister)
+
 // Called on each websocket message. Parses out the type of command,
-// and handles it appropriately.
+// and handles it appropriately. We can't know the type of the message
+// without trying to parse it, so each handler also tries to parse the
+// message, and throws if it fails.
 suspend fun handleWSMessage(text: String, source: WebSocketServerSession) {
     println("Received ${text} from ${source}")
-    //TODO: right now this sends to all sources, of course we want to
-    //      check the subscriber lists in the future instead.
-    for (client in connectedWebsockets.keys) {
-	client.outgoing.send(Frame.Text("You sent ${text}!"))
+    for (handler in handlerList) {
+        try {
+            handler(source, text)
+            return //only one valid handler per message, return on success
+        } catch (e: SerializationException) {
+            println("Could not handle with ${handler}")
+            continue
+        }
     }
 }
 
@@ -99,10 +125,6 @@ fun Application.websocketModule() {
     install(WebSockets)
     routing {
         webSocket("/ws") {
-            //TODO: this will be done on subscribe instead
-	    //connectedWebsockets.put(
-	        //this, mutableListOf<WebSocketServerSession>()
-            //)
             try {
                 while (true) {
                     val text = (incoming.receive() as Frame.Text).readText()
@@ -122,8 +144,7 @@ fun main(args: Array<String>) {
         websocketModule()
     }
 
-    //note that you can catch kotlinx.serialization.SerializationException to handle bad format
-    println(Json.parse(RegisterMessage.serializer(), "{register: test}"))
+    println(Json.parse(RegisterMessage.serializer(), "{register: Hi}"))
     println(Json.parse(SubscribeMessage.serializer(), "{subscribe: abc123}"))
     println(Json.parse(UnsubscribeMessage.serializer(), "{unsubscribe: 456def}"))
     println(Json.parse(UnsubscribeMessage.serializer(), "{unsubscribe: 456def}"))
