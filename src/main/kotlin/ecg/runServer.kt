@@ -75,6 +75,18 @@ data class ClientEntry(val displayName: String,
 val connectedWebsockets =
 	mutableMapOf<WebSocketServerSession, ClientEntry>()
 
+// Handle a data message from a client. Publish to all clients that are
+// subscribed to it.
+suspend fun handlePublish(client: WebSocketServerSession, text: String) {
+    val msg = Json.parse(PublishMessage.serializer(), text)
+
+    if (!(connectedWebsockets.containsKey(client))) { return }
+
+    for (listener in connectedWebsockets.get(client)!!.listeners) {
+        listener.send(Frame.Text(text))
+    }
+}
+
 // Handle a websocket message that registers a new source. Throws a
 // kotlinx.serialization.SerializationException if the string format
 // is not valid. Idempotent, so the same client cannot register iteself
@@ -139,7 +151,10 @@ suspend fun handleUnsubscribe(client: WebSocketServerSession, text: String) {
     println("Unsubscribed ${client} from ${found}")
 }
 
-val handlerList = listOf(::handleSubscribe, ::handleRegister, ::handleUnsubscribe)
+val handlerList = listOf(::handlePublish,
+                         ::handleSubscribe,
+                         ::handleRegister,
+                         ::handleUnsubscribe)
 
 // Called on each websocket message. Parses out the type of command,
 // and handles it appropriately. We can't know the type of the message
