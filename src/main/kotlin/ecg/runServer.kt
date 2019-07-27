@@ -64,7 +64,7 @@ data class PublishMessage(val publish: Double)
 // Values in the connectedClients map.
 data class ClientEntry(val displayName: String,
                        val uuid: String,
-                       val listeners: MutableList<WebSocketServerSession>)
+                       val listeners: MutableSet<WebSocketServerSession>)
 
 // The keys are the connected "source" clients. One is added each time
 // a ws client registers itself with the "register" command, and they
@@ -82,7 +82,7 @@ suspend fun handleRegister(client: WebSocketServerSession, text: String) {
     val msg = Json.parse(RegisterMessage.serializer(), text)
     val uuid = UUID.randomUUID().toString()
     val entry = ClientEntry(
-        msg.register, uuid, mutableListOf<WebSocketServerSession>()
+        msg.register, uuid, mutableSetOf<WebSocketServerSession>()
     )
     connectedWebsockets.put(client, entry)
     println("Registered ${entry} for ${client}")
@@ -92,7 +92,25 @@ suspend fun handleRegister(client: WebSocketServerSession, text: String) {
     client.send(Frame.Text(responseText))
 }
 
-val handlerList = listOf(::handleRegister)
+// Handle a websocket message that subscribes a client to another one
+// by its UUID. Throws if the string format is not valid.
+suspend fun handleSubscribe(client: WebSocketServerSession, text: String) {
+    val msg = Json.parse(SubscribeMessage.serializer(), text)
+    val targetUUID = msg.subscribe
+
+    var found: ClientEntry? = null
+    for ((_, entry) in connectedWebsockets) {
+        if (entry.uuid == targetUUID) {
+            found = entry
+        }
+    }
+    if (found == null) { return }
+
+    found.listeners.add(client)
+    println("Subscribed ${client} to ${found}")
+}
+
+val handlerList = listOf(::handleSubscribe, ::handleRegister)
 
 // Called on each websocket message. Parses out the type of command,
 // and handles it appropriately. We can't know the type of the message
