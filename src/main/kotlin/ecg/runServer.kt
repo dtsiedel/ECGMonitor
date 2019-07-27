@@ -83,7 +83,13 @@ suspend fun handlePublish(client: WebSocketServerSession, text: String) {
     if (!(connectedWebsockets.containsKey(client))) { return }
 
     for (listener in connectedWebsockets.get(client)!!.listeners) {
-        listener.send(Frame.Text(text))
+        try {
+            listener.send(Frame.Text(text))
+        } catch (e: java.io.IOException) {
+            println("Failed to send to ${listener}")
+        } catch (e: Exception) {
+            println("Failed to send to ${listener}")
+        }
     }
 }
 
@@ -173,6 +179,21 @@ suspend fun handleWSMessage(text: String, source: WebSocketServerSession) {
     }
 }
 
+// Called when a websocket connection closes. Removes this from the
+// connectedWebsockets list if it is in it. Removes this from the
+// listener list of all clients
+suspend fun unsubscribeAll(thisClient: WebSocketServerSession) {
+    for ((client, entry) in connectedWebsockets) {
+        if (client == thisClient) {
+            connectedWebsockets.remove(thisClient)
+        }
+        if (thisClient in entry.listeners) {
+            entry.listeners.remove(thisClient)
+        }
+    }
+    println("Cleaned client list to ${connectedWebsockets}")
+}
+
 fun Application.landingModule() {
     routing {
         get("/") {
@@ -200,8 +221,9 @@ fun Application.websocketModule() {
                     val text = (incoming.receive() as Frame.Text).readText()
 		    handleWSMessage(text, this)
                 }
-            } catch (e: ClosedReceiveChannelException) {
+            } catch (e: Exception) {
                println("Socket connection closed.")
+               unsubscribeAll(this)
             }
         }
     }
@@ -209,8 +231,8 @@ fun Application.websocketModule() {
 
 fun main(args: Array<String>) {
     val server = embeddedServer(Netty, 8888) {
-	landingModule()
-	staticModule()
+        landingModule()
+        staticModule()
         websocketModule()
     }
 
