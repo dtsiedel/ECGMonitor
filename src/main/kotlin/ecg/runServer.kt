@@ -29,6 +29,12 @@ import java.util.UUID
 @Serializable
 data class RegisterMessage(val register: String)
 
+// Used to respond to a RegisterMessage. Contains the UUID that the client
+// should use in the future. Note that the UUID is not secret - the other
+// clients use it to subscribe.
+@Serializable
+data class RegisterResponse(val uuid: String)
+
 // Used by a client to subscribe itself to a source by its UUID. This
 // will add the client to the listeners list of the source, and ensure
 // that they get any message published by that source. There is a
@@ -80,8 +86,10 @@ suspend fun handleRegister(client: WebSocketServerSession, text: String) {
     )
     connectedWebsockets.put(client, entry)
     println("Registered ${entry} for ${client}")
-    //TODO: make a response object type instead of raw string
-    client.send(Frame.Text("{'UUID':'${uuid}'}"))
+
+    val response = RegisterResponse(uuid)
+    val responseText = Json.stringify(RegisterResponse.serializer(), response)
+    client.send(Frame.Text(responseText))
 }
 
 val handlerList = listOf(::handleRegister)
