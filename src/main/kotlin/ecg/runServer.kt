@@ -77,9 +77,16 @@ val connectedWebsockets =
 
 // Handle a websocket message that registers a new source. Throws a
 // kotlinx.serialization.SerializationException if the string format
-// is not valid.
+// is not valid. Idempotent, so the same client cannot register iteself
+// multiple times.
 suspend fun handleRegister(client: WebSocketServerSession, text: String) {
     val msg = Json.parse(RegisterMessage.serializer(), text)
+
+    // Don't add another entry if the websocket registers itself again.
+    if (connectedWebsockets.containsKey(client)) {
+        return
+    }
+
     val uuid = UUID.randomUUID().toString()
     val entry = ClientEntry(
         msg.register, uuid, mutableSetOf<WebSocketServerSession>()
@@ -93,7 +100,9 @@ suspend fun handleRegister(client: WebSocketServerSession, text: String) {
 }
 
 // Handle a websocket message that subscribes a client to another one
-// by its UUID. Throws if the string format is not valid.
+// by its UUID. Throws if the string format is not valid. Idempotent,
+// so it doesn't matter if you're already subscribed. Is a no-op if
+// the target UUID does not exist.
 suspend fun handleSubscribe(client: WebSocketServerSession, text: String) {
     val msg = Json.parse(SubscribeMessage.serializer(), text)
     val targetUUID = msg.subscribe
@@ -110,7 +119,27 @@ suspend fun handleSubscribe(client: WebSocketServerSession, text: String) {
     println("Subscribed ${client} to ${found}")
 }
 
-val handlerList = listOf(::handleSubscribe, ::handleRegister)
+
+// Handle a websocket message that unsubscribes a client from another one
+// by its UUID. Throws if the string format is not valid. Idempotent, so
+// it doesn't matter if you are already subscribed or not.
+suspend fun handleUnsubscribe(client: WebSocketServerSession, text: String) {
+    val msg = Json.parse(UnsubscribeMessage.serializer(), text)
+    val targetUUID = msg.unsubscribe
+
+    var found: ClientEntry? = null
+    for ((_, entry) in connectedWebsockets) {
+        if (entry.uuid == targetUUID) {
+            found = entry
+        }
+    }
+    if (found == null) { return }
+
+    found.listeners.remove(client)
+    println("Unsubscribed ${client} from ${found}")
+}
+
+val handlerList = listOf(::handleSubscribe, ::handleRegister, ::handleUnsubscribe)
 
 // Called on each websocket message. Parses out the type of command,
 // and handles it appropriately. We can't know the type of the message
@@ -170,10 +199,5 @@ fun main(args: Array<String>) {
         websocketModule()
     }
 
-    println(Json.parse(RegisterMessage.serializer(), "{register: Hi}"))
-    println(Json.parse(SubscribeMessage.serializer(), "{subscribe: abc123}"))
-    println(Json.parse(UnsubscribeMessage.serializer(), "{unsubscribe: 456def}"))
-    println(Json.parse(UnsubscribeMessage.serializer(), "{unsubscribe: 456def}"))
-    println(Json.parse(PublishMessage.serializer(), "{publish: 78.1}"))
     server.start(wait = true)
 }
