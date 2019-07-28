@@ -89,7 +89,7 @@ val connectedWebsockets =
 // list of sources. This should be called whenever a new client is
 // added or removed, so that each client will have an up-to-date list
 // of sources.
-fun publishToAll(message: String) {
+suspend fun publishToAll(message: String) {
     val allSources = connectedWebsockets.keys.toList()
     val allSinks = connectedWebsockets.values.map{ it.listeners }.flatten()
 
@@ -98,6 +98,16 @@ fun publishToAll(message: String) {
     for (session in allTargets) {
         session.send(Frame.Text(message))
     }
+}
+
+// Send a message to all clients telling them what the current list of
+// sources is. Should be called whenever that list is changed, so that
+// the clients are all up-to-date.
+suspend fun pushSources() {
+    val sources = SourcesResponse(
+	connectedWebsockets.values.map{ it.source }.toSet()
+    )
+    publishToAll(Json.stringify(SourcesResponse.serializer(), sources))
 }
 
 // Handle a data message from a client. Publish to all clients that are
@@ -141,6 +151,7 @@ suspend fun handleRegister(client: WebSocketServerSession, text: String) {
     val response = RegisterResponse(uuid)
     val responseText = Json.stringify(RegisterResponse.serializer(), response)
     client.send(Frame.Text(responseText))
+    pushSources()
 }
 
 // Handle a websocket message that subscribes a client to another one
@@ -218,6 +229,7 @@ suspend fun unsubscribeAll(thisClient: WebSocketServerSession) {
         }
     }
     println("Cleaned client list to ${connectedWebsockets}")
+    pushSources()
 }
 
 fun Application.landingModule() {
@@ -243,6 +255,7 @@ fun Application.websocketModule() {
     routing {
         webSocket("/ws") {
             try {
+                pushSources()
                 while (true) {
                     val text = (incoming.receive() as Frame.Text).readText()
 		    handleWSMessage(text, this)
