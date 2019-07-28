@@ -85,10 +85,25 @@ data class PublishMessage(val publish: Double)
 val connectedWebsockets =
 	mutableMapOf<WebSocketServerSession, ClientEntry>()
 
+// Send a message to all sources and listeners, announcing the current
+// list of sources. This should be called whenever a new client is
+// added or removed, so that each client will have an up-to-date list
+// of sources.
+fun publishToAll(message: String) {
+    val allSources = connectedWebsockets.keys.toList()
+    val allSinks = connectedWebsockets.values.map{ it.listeners }.flatten()
+
+    val allTargets = listOf(allSources, allSinks).flatten().toSet()
+
+    for (session in allTargets) {
+        session.send(Frame.Text(message))
+    }
+}
+
 // Handle a data message from a client. Publish to all clients that are
 // subscribed to it.
 suspend fun handlePublish(client: WebSocketServerSession, text: String) {
-    val msg = Json.parse(PublishMessage.serializer(), text)
+    Json.parse(PublishMessage.serializer(), text)
 
     if (!(connectedWebsockets.containsKey(client))) { return }
 
