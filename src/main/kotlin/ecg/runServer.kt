@@ -19,6 +19,15 @@ import kotlinx.serialization.json.*
 
 import java.util.UUID
 
+// Identifies a source with an ID and a name.
+@Serializable
+data class ClientDescription(val displayName: String, val uuid: String)
+
+// Values in the connectedClients map.
+@Serializable
+data class ClientEntry(val source: ClientDescription,
+                       val listeners: MutableSet<WebSocketServerSession>)
+
 // Used by a client to register itself as a source. This will add it as
 // a key in the map of possible sources. The server also will assign a
 // UUID to the source, and report both the names and UUIDs when a browser
@@ -34,6 +43,12 @@ data class RegisterMessage(val register: String)
 // clients use it to subscribe.
 @Serializable
 data class RegisterResponse(val uuid: String)
+
+// Published to tell clients what sources are available. Sent every time a
+// new source is registered. Also a new connection is sent one of these
+// automatically, so that they can have a starting point.
+@Serializable
+data class SourcesResponse(val sources: Set<ClientDescription>)
 
 // Used by a client to subscribe itself to a source by its UUID. This
 // will add the client to the listeners list of the source, and ensure
@@ -60,11 +75,6 @@ data class UnsubscribeMessage(val unsubscribe: String)
 // ECG monitor, which is why it is of type Double.
 @Serializable
 data class PublishMessage(val publish: Double)
-
-// Values in the connectedClients map.
-data class ClientEntry(val displayName: String,
-                       val uuid: String,
-                       val listeners: MutableSet<WebSocketServerSession>)
 
 // The keys are the connected "source" clients. One is added each time
 // a ws client registers itself with the "register" command, and they
@@ -107,7 +117,8 @@ suspend fun handleRegister(client: WebSocketServerSession, text: String) {
 
     val uuid = UUID.randomUUID().toString()
     val entry = ClientEntry(
-        msg.register, uuid, mutableSetOf<WebSocketServerSession>()
+        ClientDescription(msg.register, uuid),
+        mutableSetOf<WebSocketServerSession>()
     )
     connectedWebsockets.put(client, entry)
     println("Registered ${entry} for ${client}")
@@ -127,7 +138,7 @@ suspend fun handleSubscribe(client: WebSocketServerSession, text: String) {
 
     var found: ClientEntry? = null
     for ((_, entry) in connectedWebsockets) {
-        if (entry.uuid == targetUUID) {
+        if (entry.source.uuid == targetUUID) {
             found = entry
         }
     }
@@ -147,7 +158,7 @@ suspend fun handleUnsubscribe(client: WebSocketServerSession, text: String) {
 
     var found: ClientEntry? = null
     for ((_, entry) in connectedWebsockets) {
-        if (entry.uuid == targetUUID) {
+        if (entry.source.uuid == targetUUID) {
             found = entry
         }
     }
