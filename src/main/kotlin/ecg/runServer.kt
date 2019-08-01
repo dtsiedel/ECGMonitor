@@ -19,30 +19,33 @@ import kotlinx.serialization.json.*
 
 import java.util.UUID
 
+//TODO: It seems like the server hangs when the first websocket to be opened closes. This means other clients never hear about it closing. It seems to only
+//      apply to the first websocket ever opened against the server. Very odd behavior, maybe related to the first request to a route being slow?
+
 // Identifies a source with an ID and a name.
 @Serializable
 data class ClientDescription(val displayName: String, val uuid: String)
 
 // Values in the connectedClients map.
 @Serializable
-data class ClientEntry(val source: ClientDescription,
-                       val listeners: MutableSet<WebSocketServerSession>)
+data class ClientEntry(
+    val source: ClientDescription,
+    val listeners: MutableSet<WebSocketServerSession>
+)
 
-// Used by a client to register itself as a source. This will add it as
-// a key in the map of possible sources. The server also will assign a
-// UUID to the source, and report both the names and UUIDs when a browser
-// requests it. There is no "unregister" command - a registed client
-// will automatically by unregistered when the websocket connection
-// is closed.
-// Format: {"register": "some display name"}
+// Used by a client to set its name. By default, any client that connects
+// is given its UUID as a name. With this, you can set your own display
+// name for viewing by other clients.
+// Format: {"name": "some display name"}
 @Serializable
-data class RegisterMessage(val register: String)
+data class SetNameMessage(val name: String)
 
-// Used to respond to a RegisterMessage. Contains the UUID that the client
-// should use in the future. Note that the UUID is not secret - the other
-// clients use it to subscribe.
+// Sent to a client when it registers so that it knows its UUID. The client
+// can set its name with this. Not secure since any other client can learn
+// this and set its name as well, but since I'm controlling all clients I
+// can safely ignore that.
 @Serializable
-data class RegisterResponse(val uuid: String)
+data class ConnectResponse(val uuid: String)
 
 // Published to tell clients what sources are available. Sent every time a
 // new source is registered. Also a new connection is sent one of these
@@ -82,20 +85,11 @@ data class PublishMessage(val publish: Double)
 // that client disconnects. The values are each a list of the clients
 // that are waiting for updates. Clients can add or remove themselves
 // from that list with "subscribe"/"unsubscribe".
-val connectedWebsockets =
-	mutableMapOf<WebSocketServerSession, ClientEntry>()
+val connectedWebsockets = mutableMapOf<WebSocketServerSession, ClientEntry>()
 
-// Send a message to all sources and listeners, announcing the current
-// list of sources. This should be called whenever a new client is
-// added or removed, so that each client will have an up-to-date list
-// of sources.
+// Send a message to all sources and listeners.
 suspend fun publishToAll(message: String) {
-    val allSources = connectedWebsockets.keys.toList()
-    val allSinks = connectedWebsockets.values.map{ it.listeners }.flatten()
-
-    val allTargets = listOf(allSources, allSinks).flatten().toSet()
-
-    for (session in allTargets) {
+    for (session in connectedWebsockets.keys) {
         session.send(Frame.Text(message))
     }
 }
@@ -107,6 +101,7 @@ suspend fun pushSources() {
     val sources = SourcesResponse(
 	connectedWebsockets.values.map{ it.source }.toSet()
     )
+    println("Pushing list ${sources}")
     publishToAll(Json.stringify(SourcesResponse.serializer(), sources))
 }
 
@@ -115,6 +110,7 @@ suspend fun pushSources() {
 suspend fun handlePublish(client: WebSocketServerSession, text: String) {
     Json.parse(PublishMessage.serializer(), text)
 
+    // should never happen but handle anyway
     if (!(connectedWebsockets.containsKey(client))) { return }
 
     for (listener in connectedWebsockets.get(client)!!.listeners) {
@@ -128,28 +124,43 @@ suspend fun handlePublish(client: WebSocketServerSession, text: String) {
     }
 }
 
-// Handle a websocket message that registers a new source. Throws a
-// kotlinx.serialization.SerializationException if the string format
-// is not valid. Idempotent, so the same client cannot register iteself
-// multiple times.
-suspend fun handleRegister(client: WebSocketServerSession, text: String) {
-    val msg = Json.parse(RegisterMessage.serializer(), text)
+// Set this client's display name. Then pushSources so that the new list
+// is sent out to clients. Throws if the format of the message is wrong
+suspend fun handleSetName(client: WebSocketServerSession, text: String) {
+    val msg = Json.parse(SetNameMessage.serializer(), text)
 
-    // Don't add another entry if the websocket registers itself again.
+    val found = connectedWebsockets.get(client)
+    if (found == null) { return }
+
+    var newEntry = ClientEntry(
+        ClientDescription(msg.name, found.source.uuid),
+        found.listeners
+    )
+
+    connectedWebsockets.put(client, newEntry)
+    pushSources()
+}
+
+// Add a new client to the list, with no listeners. Throws a
+// kotlinx.serialization.SerializationException if the string format
+// is not valid.
+suspend fun addClient(client: WebSocketServerSession) {
+    // Don't add another entry if the websocket is somehow already in the list
     if (connectedWebsockets.containsKey(client)) {
         return
     }
 
     val uuid = UUID.randomUUID().toString()
     val entry = ClientEntry(
-        ClientDescription(msg.register, uuid),
+        // by default both name and ID are the UUID
+        ClientDescription(uuid, uuid),
         mutableSetOf<WebSocketServerSession>()
     )
     connectedWebsockets.put(client, entry)
     println("Registered ${entry} for ${client}")
 
-    val response = RegisterResponse(uuid)
-    val responseText = Json.stringify(RegisterResponse.serializer(), response)
+    val response = ConnectResponse(uuid)
+    val responseText = Json.stringify(ConnectResponse.serializer(), response)
     client.send(Frame.Text(responseText))
     pushSources()
 }
@@ -174,7 +185,6 @@ suspend fun handleSubscribe(client: WebSocketServerSession, text: String) {
     println("Subscribed ${client} to ${found}")
 }
 
-
 // Handle a websocket message that unsubscribes a client from another one
 // by its UUID. Throws if the string format is not valid. Idempotent, so
 // it doesn't matter if you are already subscribed or not.
@@ -196,7 +206,7 @@ suspend fun handleUnsubscribe(client: WebSocketServerSession, text: String) {
 
 val handlerList = listOf(::handlePublish,
                          ::handleSubscribe,
-                         ::handleRegister,
+                         ::handleSetName,
                          ::handleUnsubscribe)
 
 // Called on each websocket message. Parses out the type of command,
@@ -228,7 +238,7 @@ suspend fun unsubscribeAll(thisClient: WebSocketServerSession) {
             entry.listeners.remove(thisClient)
         }
     }
-    println("Cleaned client list to ${connectedWebsockets}")
+    println("Cleaned client list of ${thisClient}")
     pushSources()
 }
 
@@ -254,15 +264,16 @@ fun Application.websocketModule() {
     install(WebSockets)
     routing {
         webSocket("/ws") {
+            addClient(this)
             try {
-                pushSources()
                 while (true) {
                     val text = (incoming.receive() as Frame.Text).readText()
 		    handleWSMessage(text, this)
                 }
             } catch (e: Exception) {
-               println("Socket connection closed.")
+               // socket throws an exception when it closes.
                unsubscribeAll(this)
+               println("Socket connection closed because of ${e}.")
             }
         }
     }
