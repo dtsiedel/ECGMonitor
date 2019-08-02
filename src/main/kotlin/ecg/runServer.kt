@@ -19,9 +19,6 @@ import kotlinx.serialization.json.*
 
 import java.util.UUID
 
-//TODO: It seems like the server hangs when the first websocket to be opened closes. This means other clients never hear about it closing. It seems to only
-//      apply to the first websocket ever opened against the server. Very odd behavior, maybe related to the first request to a route being slow?
-
 // Identifies a source with an ID and a name.
 @Serializable
 data class ClientDescription(val displayName: String, val uuid: String)
@@ -41,6 +38,7 @@ data class ClientEntry(
 // Format: {"name": "some display name"}
 @Serializable
 data class SetNameMessage(val name: String)
+val setNameMessageSerializer = SetNameMessage.serializer()
 
 // Sent to a client when it registers so that it knows its UUID. The client
 // can set its name with this. Not secure since any other client can learn
@@ -48,12 +46,14 @@ data class SetNameMessage(val name: String)
 // can safely ignore that.
 @Serializable
 data class ConnectResponse(val uuid: String)
+val connectResponseSerializer = ConnectResponse.serializer()
 
 // Published to tell clients what sources are available. Sent every time a
 // new source is registered. Also a new connection is sent one of these
 // automatically, so that they can have a starting point.
 @Serializable
 data class SourcesResponse(val sources: Set<ClientDescription>)
+val sourcesResponseSerializer = SourcesResponse.serializer()
 
 // Used by a client to subscribe itself to a source by its UUID. This
 // will add the client to the listeners list of the source, and ensure
@@ -63,6 +63,7 @@ data class SourcesResponse(val sources: Set<ClientDescription>)
 // Format: {"subscribe": "some UUID"}
 @Serializable
 data class SubscribeMessage(val subscribe: String)
+val subscribeMessageSerializer = SubscribeMessage.serializer()
 
 // Used by a client to unsubscribe itself from a source by its UUID.
 // The client will then no longer receive messages published by that
@@ -72,6 +73,7 @@ data class SubscribeMessage(val subscribe: String)
 // Format: {"unsubscribe": "some UUID"}
 @Serializable
 data class UnsubscribeMessage(val unsubscribe: String)
+val unsubscribeMessageSerializer = UnsubscribeMessage.serializer()
 
 // Used by a source to publish data to all of its listeners. Is only
 // published to its listeners at the exact moment that it is sent,
@@ -80,6 +82,7 @@ data class UnsubscribeMessage(val unsubscribe: String)
 // ECG monitor, which is why it is of type Double.
 @Serializable
 data class PublishMessage(val publish: Double)
+val publishMessageSerializer = PublishMessage.serializer()
 
 // The keys are the connected "source" clients. One is added each time
 // a ws client registers itself with the "register" command, and they
@@ -104,13 +107,13 @@ suspend fun pushSources() {
 	connectedWebsockets.values.filter{ it.isSource }.map{ it.source }.toSet()
     )
     println("Pushing list ${sources}")
-    publishToAll(Json.stringify(SourcesResponse.serializer(), sources))
+    publishToAll(Json.stringify(sourcesResponseSerializer, sources))
 }
 
 // Handle a data message from a client. Publish to all clients that are
 // subscribed to it.
 suspend fun handlePublish(client: WebSocketServerSession, text: String) {
-    Json.parse(PublishMessage.serializer(), text)
+    Json.parse(publishMessageSerializer, text)
 
     // should never happen but handle anyway
     if (!(connectedWebsockets.containsKey(client))) { return }
@@ -130,7 +133,7 @@ suspend fun handlePublish(client: WebSocketServerSession, text: String) {
 // so that the new list is sent out to clients. Throws if the format of
 // the message is wrong
 suspend fun handleSetName(client: WebSocketServerSession, text: String) {
-    val msg = Json.parse(SetNameMessage.serializer(), text)
+    val msg = Json.parse(setNameMessageSerializer, text)
 
     val found = connectedWebsockets.get(client)
     if (found == null) { return }
@@ -166,7 +169,7 @@ suspend fun addClient(client: WebSocketServerSession) {
     println("Registered ${entry} for ${client}")
 
     val response = ConnectResponse(uuid)
-    val responseText = Json.stringify(ConnectResponse.serializer(), response)
+    val responseText = Json.stringify(connectResponseSerializer, response)
     client.send(Frame.Text(responseText))
     pushSources()
 }
@@ -176,7 +179,7 @@ suspend fun addClient(client: WebSocketServerSession) {
 // so it doesn't matter if you're already subscribed. Is a no-op if
 // the target UUID does not exist.
 suspend fun handleSubscribe(client: WebSocketServerSession, text: String) {
-    val msg = Json.parse(SubscribeMessage.serializer(), text)
+    val msg = Json.parse(subscribeMessageSerializer, text)
     val targetUUID = msg.subscribe
 
     var found: ClientEntry? = null
@@ -195,7 +198,7 @@ suspend fun handleSubscribe(client: WebSocketServerSession, text: String) {
 // by its UUID. Throws if the string format is not valid. Idempotent, so
 // it doesn't matter if you are already subscribed or not.
 suspend fun handleUnsubscribe(client: WebSocketServerSession, text: String) {
-    val msg = Json.parse(UnsubscribeMessage.serializer(), text)
+    val msg = Json.parse(unsubscribeMessageSerializer, text)
     val targetUUID = msg.unsubscribe
 
     var found: ClientEntry? = null
@@ -237,13 +240,11 @@ suspend fun handleWSMessage(text: String, source: WebSocketServerSession) {
 // listener list of all clients
 suspend fun unsubscribeAll(thisClient: WebSocketServerSession) {
     for ((client, entry) in connectedWebsockets) {
-        if (client == thisClient) {
-            connectedWebsockets.remove(thisClient)
-        }
         if (thisClient in entry.listeners) {
             entry.listeners.remove(thisClient)
         }
     }
+    connectedWebsockets.remove(thisClient)
     println("Cleaned client list of ${thisClient}")
     pushSources()
 }
@@ -276,10 +277,13 @@ fun Application.websocketModule() {
                     val text = (incoming.receive() as Frame.Text).readText()
 		    handleWSMessage(text, this)
                 }
-            } catch (e: Exception) {
+            } catch (e: ClosedReceiveChannelException) {
                // socket throws an exception when it closes.
-               unsubscribeAll(this)
                println("Socket connection closed because of ${e}.")
+               unsubscribeAll(this)
+            } catch (e: Throwable) {
+               println("Unexpected exception: ${e}")
+               unsubscribeAll(this)
             }
         }
     }
