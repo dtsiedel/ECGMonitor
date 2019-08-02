@@ -30,11 +30,13 @@ data class ClientDescription(val displayName: String, val uuid: String)
 @Serializable
 data class ClientEntry(
     val source: ClientDescription,
+    val isSource: Boolean,
     val listeners: MutableSet<WebSocketServerSession>
 )
 
-// Used by a client to set its name. By default, any client that connects
-// is given its UUID as a name. With this, you can set your own display
+// Used by a client to set its name and declare itself as a source. By
+// default, any client that connects is not a source. With this, you can
+// set your display name and other clients can subscribe.
 // name for viewing by other clients.
 // Format: {"name": "some display name"}
 @Serializable
@@ -99,7 +101,7 @@ suspend fun publishToAll(message: String) {
 // the clients are all up-to-date.
 suspend fun pushSources() {
     val sources = SourcesResponse(
-	connectedWebsockets.values.map{ it.source }.toSet()
+	connectedWebsockets.values.filter{ it.isSource }.map{ it.source }.toSet()
     )
     println("Pushing list ${sources}")
     publishToAll(Json.stringify(SourcesResponse.serializer(), sources))
@@ -124,16 +126,19 @@ suspend fun handlePublish(client: WebSocketServerSession, text: String) {
     }
 }
 
-// Set this client's display name. Then pushSources so that the new list
-// is sent out to clients. Throws if the format of the message is wrong
+// Set this client's display name and make it a source. Then pushSources
+// so that the new list is sent out to clients. Throws if the format of
+// the message is wrong
 suspend fun handleSetName(client: WebSocketServerSession, text: String) {
     val msg = Json.parse(SetNameMessage.serializer(), text)
 
     val found = connectedWebsockets.get(client)
     if (found == null) { return }
 
+    // set the name and make it a source
     var newEntry = ClientEntry(
         ClientDescription(msg.name, found.source.uuid),
+        true,
         found.listeners
     )
 
@@ -152,8 +157,9 @@ suspend fun addClient(client: WebSocketServerSession) {
 
     val uuid = UUID.randomUUID().toString()
     val entry = ClientEntry(
-        // by default both name and ID are the UUID
+        // by default both name and ID are the UUID, and it is not a source
         ClientDescription(uuid, uuid),
+        false,
         mutableSetOf<WebSocketServerSession>()
     )
     connectedWebsockets.put(client, entry)
