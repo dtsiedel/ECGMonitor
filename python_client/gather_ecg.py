@@ -40,12 +40,11 @@ def process_send_queue(ws, q):
 # each reading into the outgoing queue to be sent out.
 def gather_data(ws, args):
   if args.file is None:
-    data_points = 5
-    for _ in range(data_points):
+    while True:
       d = random.randint(0, 100)
       if thread_sigil.is_set():
         break
-      time.sleep(1)
+      time.sleep(0.25)
       publish(d)
   else:
     try:
