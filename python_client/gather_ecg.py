@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 import queue
@@ -7,20 +8,26 @@ import threading
 import time
 import websocket
 
-#TODO: Add a commandline flag to indicate whether to read the data from the analog in, or
-#      from a file (and the sleep duration between publishes for the latter). Make it a
-#      parameter into gather_data, so it can split into one behavior or the other
-
 outgoing = queue.Queue()
 thread_sigil = threading.Event()
 process_done = threading.Event()
 gather_done = threading.Event()
 
+url = "ws://192.168.7.2:8888/ws"
+
+# Publish the given data point d by adding it to the publish queue
+def publish(d):
+  print("Sending data {}".format(d))
+  outgoing.put(d)
+
 # Called from the send_thread. Loops forever, looking for data from the outgoing queue. When it
 # finds data, it encodes it as a JSON string then sends it out in a publish message.
 def process_send_queue(ws, q):
   while not thread_sigil.isSet():
-    next = q.get(timeout=2)
+    try:
+      next = q.get(timeout=2)
+    except queue.Empty:
+      continue
     if next is not None:
       try:
         ws.send(json.dumps(next))
@@ -31,21 +38,31 @@ def process_send_queue(ws, q):
 
 # Called from the gather_thread. Reads data in a loop from the selected input source, and puts
 # each reading into the outgoing queue to be sent out.
-def gather_data(ws):
-  data_points = 5
-  for d in range(data_points):
-    if thread_sigil.isSet():
-      break
-    time.sleep(1)
-    print("Sending data {}".format(random.randint(0, 100)))
-    outgoing.put(d)
+def gather_data(ws, args):
+  if args.file is None:
+    data_points = 5
+    for _ in range(data_points):
+      d = random.randint(0, 100)
+      if thread_sigil.is_set():
+        break
+      time.sleep(1)
+      publish(d)
+  else:
+    try:
+      with open(args.file, 'r') as in_file:
+        data_points = [l.rstrip() for l in in_file.readlines()]
+        for d in data_points:
+          if thread_sigil.is_set():
+            break
+          time.sleep(1)
+          publish(d)
+    except Exception as e:
+      print("Could not open input file: {}".format(e))
   print("Gather thread finished")
   gather_done.set()
   do_shutdown(ws)
 
-url = "ws://192.168.7.2:8888/ws"
-
-def on_open(ws):
+def on_open(ws, args):
   print("Connected to server.")
   name = "Heartbeat{}".format(random.randint(0, 100))
   payload = json.dumps({"name":name})
@@ -53,7 +70,7 @@ def on_open(ws):
   ws.send(payload)
   send_thread = threading.Thread(target=process_send_queue, args=(ws, outgoing,))
   send_thread.start()
-  gather_thread = threading.Thread(target=gather_data, args=(ws,))
+  gather_thread = threading.Thread(target=gather_data, args=(ws, args))
   gather_thread.start()
 
 def on_close(ws):
@@ -81,7 +98,16 @@ def do_shutdown(ws):
     time.sleep(1)
     waitCount += 1
 
-ws = websocket.WebSocketApp(url, on_open=on_open, on_close=on_close, on_message=on_message, on_error=on_error)
+parser = argparse.ArgumentParser(description='Read heartbeat data and send it out.')
+parser.add_argument('-f', '--file',
+                    help='An input file to read from, if requested. Otherwise read from the analog input.')
+args = parser.parse_args()
+
+ws = websocket.WebSocketApp(url,
+			    on_open=lambda ws: on_open(ws, args),
+			    on_close=on_close,
+			    on_message=on_message,
+			    on_error=on_error)
 signal.signal(signal.SIGINT, lambda a,b : do_shutdown(ws))
 ws.run_forever()
 signal.pause()
