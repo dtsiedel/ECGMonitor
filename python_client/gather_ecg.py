@@ -30,7 +30,7 @@ def process_send_queue(ws, q):
       continue
     if next is not None:
       try:
-        ws.send(json.dumps(next))
+        ws.send(json.dumps({"publish": next}))
       except websocket._exceptions.WebSocketConnectionClosedException:
         break # closes the thread, since loop and function end
   print("Process thread finished")
@@ -63,9 +63,9 @@ def gather_data(ws, args):
 
 def on_open(ws, args):
   print("Connected to server.")
-  name = "Heartbeat{}".format(random.randint(0, 100))
+  name = "HeartbeatSensor{}".format(random.randint(0, 100))
   payload = json.dumps({"name":name})
-  print("Acknowledging with with {}".format(payload))
+  print("Acknowledging with {}".format(payload))
   ws.send(payload)
   send_thread = threading.Thread(target=process_send_queue, args=(ws, outgoing,))
   send_thread.start()

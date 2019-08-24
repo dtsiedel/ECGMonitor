@@ -116,10 +116,14 @@ suspend fun handlePublish(client: WebSocketServerSession, text: String) {
     Json.parse(publishMessageSerializer, text)
 
     // should never happen but handle anyway
-    if (!(connectedWebsockets.containsKey(client))) { return }
+    if (!(connectedWebsockets.containsKey(client))) {
+        println("key was not in connected websockets list")
+        return
+    }
 
     for (listener in connectedWebsockets.get(client)!!.listeners) {
         try {
+            println("Sending ${text} to ${listener}")
             listener.send(Frame.Text(text))
         } catch (e: java.io.IOException) {
             println("Failed to send to ${listener}")
@@ -229,7 +233,7 @@ suspend fun handleWSMessage(text: String, source: WebSocketServerSession) {
             handler(source, text)
             return //only one valid handler per message, return on success
         } catch (e: SerializationException) {
-            println("Could not handle with ${handler}")
+            //println("Could not handle with ${handler}")
             continue
         }
     }
